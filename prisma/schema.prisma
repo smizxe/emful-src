@@ -1,0 +1,579 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  name               String?
+  passwordHash       String
+  role               String              @default("SELLER")
+  /// Every role this account holds. Empty means just `role`; `role` stays the
+  /// primary one (where they land after login, what the session cookie carries).
+  roles              String[]            @default([])
+  sellerId           String?
+  isActive           Boolean             @default(true)
+  isBanned           Boolean             @default(false)
+  bannedAt           DateTime?
+  bannedReason       String?
+  suspendedUntil     DateTime?
+  suspensionReason   String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  auditLogs          AuditLog[]
+  inventoryLogs      InventoryMovement[]
+  confirmedTopups    TopupRequest[]      @relation("ConfirmedBy")
+  seller             Seller?             @relation(fields: [sellerId], references: [id])
+  verificationTokens VerificationToken[]
+  assignedJobs       Job[]               @relation("JobStaff")
+  Ticket             Ticket[]
+}
+
+model VerificationToken {
+  id         String   @id @default(uuid())
+  identifier String
+  token      String
+  expires    DateTime
+  createdAt  DateTime @default(now())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@unique([identifier, token])
+}
+
+model Seller {
+  id            String         @id @default(uuid())
+  code          String         @unique
+  name          String
+  contactEmail  String?
+  phone         String?
+  address       String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  jobs          Job[]
+  orders        Order[]
+  topupRequests TopupRequest[]
+  users         User[]
+  wallet        Wallet?
+  walletLedger  WalletLedger[]
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  sellerId  String   @unique
+  balance   Float    @default(0.0)
+  currency  String   @default("USD")
+  updatedAt DateTime @updatedAt
+  seller    Seller   @relation(fields: [sellerId], references: [id])
+}
+
+model WalletLedger {
+  id        String   @id @default(uuid())
+  sellerId  String
+  type      String
+  amount    Float
+  currency  String   @default("USD")
+  refType   String
+  refId     String?
+  note      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+  seller    Seller   @relation(fields: [sellerId], references: [id])
+
+  @@index([sellerId])
+  @@index([refType, refId])
+  @@index([createdAt])
+}
+
+model PaymentMethod {
+  id   String @id @default(uuid())
+  name String // e.g. "VN Bank Transfer", "PayPal", "Wise"
+
+  currency    String   @default("VND") // VND or USD
+  qrImageUrl  String? // Uploaded QR code image
+  accountInfo String? // Bank account details, PayPal email, etc.
+  note        String? // Instructions for sellers
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  topupRequests TopupRequest[]
+}
+
+model TopupRequest {
+  id              String         @id @default(uuid())
+  sellerId        String
+  amount          Float
+  currency        String         @default("VND")
+  exchangeRate    Float? // Rate used (e.g. 25000 VND / USD)
+  amountReceived  Float? // USD Amount credited
+  bankName        String?
+  bankAccount     String?
+  transferContent String?
+  status          String
+  evidenceUrl     String?
+  confirmedById   String?
+  confirmedAt     DateTime?
+  paymentMethodId String?
+  createdAt       DateTime       @default(now())
+  confirmedBy     User?          @relation("ConfirmedBy", fields: [confirmedById], references: [id])
+  seller          Seller         @relation(fields: [sellerId], references: [id])
+  paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id])
+}
+
+model SystemSetting {
+  key         String   @id
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model ProductTemplate {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  isDefault    Boolean  @default(false)
+  colors       String // JSON array of colors
+  sizes        String // JSON array of sizes
+  colorMapping String? // JSON object {colorName: hexCode}
+
+  // Stallion Defaults
+  itemDescription     String?
+  itemCurrency        String   @default("CAD")
+  hsCode              String   @default("6110.20.20.41")
+  countryOfOrigin     String   @default("MX")
+  customsDescription  String?
+  itemValue           Float    @default(8)
+  itemWeight          Float    @default(0.36)
+  weightUnit          String   @default("kg")
+  itemLength          Float    @default(20)
+  itemWidth           Float    @default(12)
+  itemHeight          Float    @default(6)
+  sizeUnit            String   @default("cm")
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Product {
+  id            String           @id @default(uuid())
+  sku           String           @unique
+  name          String
+  sortOrder     Int              @default(0)
+  isActive      Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  extraFees     String?
+  shippingRates String?
+  colorMapping        String?
+  pricingAdjustments  String? // JSON: { color: { "Red": 2 }, size: { "XL": 1 }, enableColor: true, enableSize: false }
+  itemValue           Float    @default(8) // Customs Item Value for Stallion CSV (default $8)
+  
+  // Stallion Shipping Info
+  itemDescription     String?
+  itemCurrency        String   @default("CAD")
+  hsCode              String   @default("6110.20.20.41")
+  countryOfOrigin     String   @default("MX")
+  customsDescription  String?
+  itemWeight          Float    @default(0.36)
+  weightUnit          String   @default("kg")
+  itemLength          Float    @default(20)
+  itemWidth           Float    @default(12)
+  itemHeight          Float    @default(6)
+  sizeUnit            String   @default("cm")
+
+  description         String?
+  images        String           @default("[]") // Deprecated: Use ProductImage relation
+  variants      ProductVariant[]
+  productImages ProductImage[]
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  url       String
+  createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model ProductVariant {
+  id           String   @id @default(uuid())
+  productId    String
+  color        String?
+  size         String?
+  basePrice    Float
+  cogsEstimate Float?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  product      Product  @relation(fields: [productId], references: [id])
+
+  @@unique([productId, color, size])
+}
+
+model InventoryItem {
+  id        String   @id @default(uuid())
+  sku       String
+  color     String?
+  size      String?
+  onHand    Int      @default(0)
+  onOrder   Int      @default(0)
+  reserved  Int      @default(0)
+  minStock  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sku, color, size])
+}
+
+model InventoryMovement {
+  id          String   @id @default(uuid())
+  sku         String
+  color       String?
+  size        String?
+  qtyChange   Int
+  type        String
+  refType     String?
+  refId       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+}
+
+model Order {
+  id              String     @id @default(uuid())
+  sellerId        String
+  orderCode       String     @unique
+  status          String     @default("PENDING_APPROVAL")
+  shippingStatus  String     @default("PENDING")
+  totalAmount     Float
+  currency        String     @default("USD")
+  shippingCountry String?
+  shippingMethod  String?
+  trackingNumber  String?
+  carrier         String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  jobs            Job[]
+  seller          Seller     @relation(fields: [sellerId], references: [id])
+  shipments       Shipment[]
+  Ticket          Ticket[]
+  shippingCost    Float      @default(0)
+  rejectionReason String?
+  priorityProduction    Boolean @default(false)
+  priorityShipping      Boolean @default(false)
+  priorityProductionFee Float   @default(0)
+  priorityShippingFee   Float   @default(0)
+}
+
+model Job {
+  id                  String    @id @default(uuid())
+  orderId             String
+  sellerId            String
+  jobCode             String    @unique
+  status              String    @default("PENDING_APPROVAL")
+  sku                 String
+  color               String?
+  size                String?
+  qty                 Int       @default(1)
+  recipientName       String?
+  phone               String?
+  address1            String?
+  address2            String?
+  city                String?
+  state               String?
+  zip                 String?
+  country             String?
+  designs             String    @default("[]")
+  /// Who makes the artwork when the import did not carry one:
+  /// '' not answered, 'SELLER' they will send it, 'EM' we design it for them.
+  designBy            String    @default("")
+  /// Photos of the finished garment, uploaded by the shop for the seller to
+  /// see and download. JSON array of URLs.
+  productPhotos       String    @default("[]")
+  fileLocalPath       String?
+  fileStatus          String    @default("PENDING")
+  embroideryDriveLink String?
+  priceToCharge       Float
+  shippingCost        Float     @default(0)
+  extraFees           Float     @default(0)
+  cogsActual          Float?
+  notes               String?
+  shippingLabel       String?
+  assignedStaffId     String?
+  assignedStaff       User?     @relation("JobStaff", fields: [assignedStaffId], references: [id])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  seller              Seller    @relation(fields: [sellerId], references: [id])
+  order               Order     @relation(fields: [orderId], references: [id])
+  tokens              QrToken[]
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([assignedStaffId])
+}
+
+model QrToken {
+  id        String    @id @default(uuid())
+  jobId     String
+  type      String
+  token     String    @unique
+  maxUses   Int?
+  usedCount Int       @default(0)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  job       Job       @relation(fields: [jobId], references: [id])
+}
+
+model Shipment {
+  id             String   @id @default(uuid())
+  orderId        String
+  carrier        String?
+  trackingNumber String?
+  labelPdfUrl    String?
+  status         String
+  createdAt      DateTime @default(now())
+  order          Order    @relation(fields: [orderId], references: [id])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorUserId String?
+  actorType   String
+  action      String
+  entityType  String
+  entityId    String?
+  metaJson    String?
+  createdAt   DateTime @default(now())
+  actorUser   User?    @relation(fields: [actorUserId], references: [id])
+}
+
+model Ticket {
+  id             String   @id @default(uuid())
+  userId         String
+  orderId        String?
+  subject        String?
+  description    String? // Initial description, kept for reference
+  imageUrl       String?
+  status         String   @default("PENDING") // PENDING, RESOLVED, REJECTED
+  resolutionType String? // REFUND, REPLACEMENT, REJECT, NONE
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id])
+  order    Order?          @relation(fields: [orderId], references: [id])
+  messages TicketMessage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model TicketMessage {
+  id         String   @id @default(uuid())
+  ticketId   String
+  senderId   String
+  senderRole String // USER or ADMIN
+  message    String
+  imageUrl   String? // Legacy, prefer attachments
+  createdAt  DateTime @default(now())
+
+  ticket      Ticket             @relation(fields: [ticketId], references: [id])
+  attachments TicketAttachment[]
+
+  @@index([ticketId])
+}
+
+model TicketAttachment {
+  id        String @id @default(uuid())
+  messageId String
+  url       String
+  type      String @default("image") // image, video, file
+
+  message TicketMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String // REGISTER, TOPUP, TICKET, GENERAL
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  link      String? // URL to redirect to when clicked
+}
+
+// ---- Etsy direct-import mapping (per seller) ----
+// Lets a seller upload a raw Etsy "Sold Order Items" export and have it turned
+// into internal orders automatically, replacing the manual intermediate Excel.
+
+model EtsyDesignMap {
+  id         String   @id @default(uuid())
+  sellerId   String
+  etsySku    String // Etsy listing SKU (== Seller SKU), e.g. "EM-NURSE"
+  designLink String
+  position   String   @default("CENTER_CHEST")
+  mockup     String   @default("")
+  type       String   @default("Embroidery")
+  productSku String? // optional garment blank override; otherwise resolved via EtsyStyleMap
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([sellerId, etsySku])
+  @@index([sellerId])
+}
+
+model EtsyStyleMap {
+  id         String   @id @default(uuid())
+  sellerId   String
+  style      String // Etsy "Style and Size" style token, e.g. "Sweatshirt", "Hoodie", "Tee"
+  productSku String // internal garment blank SKU, e.g. "EM-18000"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([sellerId, style])
+  @@index([sellerId])
+}
+
+model EtsyColorMap {
+  id            String   @id @default(uuid())
+  sellerId      String
+  etsyColor     String
+  internalColor String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([sellerId, etsyColor])
+  @@index([sellerId])
+}
+
+// ---- Public REST API keys (per seller) ----
+// Sellers generate a key to call /api/v1/* from their own systems. Only the
+// SHA-256 hash is stored; the plaintext key is shown once at creation.
+model ApiKey {
+  id         String    @id @default(uuid())
+  sellerId   String
+  name       String    @default("API Key")
+  keyHash    String    @unique
+  prefix     String // shown to identify the key, e.g. "emf_live_ab12cd"
+  lastUsedAt DateTime?
+  revoked    Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+
+  @@index([sellerId])
+  @@index([keyHash])
+}
+
+/// A piece of artwork the shop needs a designer to produce or fix for a job.
+/// Admin raises it from Production Release; the designer works it in their own
+/// portal, fills in the price and returns the finished file.
+/// Scalar foreign keys only, matching the other side tables in this schema.
+model DesignRequest {
+  id           String   @id @default(uuid())
+  jobId        String   @unique
+  orderId      String
+  orderCode    String
+  sellerId     String
+  sellerName   String   @default("")
+  customerName String   @default("")
+  sku          String   @default("")
+  sellerSku    String   @default("")
+  /// 'NEW' when there is no artwork yet, 'REVISION' when an existing one needs fixing.
+  type         String   @default("NEW")
+  /// Reference the admin hands to the designer (mockup / existing design).
+  designLink   String   @default("")
+  /// 'PENDING' | 'FINISHED'
+  status       String   @default("PENDING")
+  /// Finished artwork returned by the designer; copied onto the job when finished.
+  fileLink     String   @default("")
+  /// One finished file per position, as [{ index, position, link }] where index
+  /// is the position's place in the job's designs. `fileLink` stays the first one.
+  fileLinks    String   @default("[]")
+  /// What the designer charges for this piece.
+  price        Float?
+  note         String   @default("")
+  createdBy    String   @default("")
+  /// Which designer this is routed to, from the seller's assignment.
+  assignedDesignerId   String @default("")
+  assignedDesignerName String @default("")
+  finishedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([orderId])
+}
+
+/// A finished design the shop has corrected for one seller, remembered against
+/// that seller's own SKU. Scoped per seller: one seller never sees another's
+/// fixed artwork. Lookup only -- nothing is applied to an order automatically.
+model SellerDesignFix {
+  id         String   @id @default(uuid())
+  sellerId   String
+  sellerSku  String
+  fileLink   String
+  /// The garment SKU the fix was made on, for context in the list.
+  sku        String   @default("")
+  orderCode  String   @default("")
+  note       String   @default("")
+  /// The design request this came from, so the trail back is kept.
+  jobId      String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([sellerId, sellerSku])
+  @@index([sellerId])
+}
+
+/// Which designer looks after which seller. One designer per seller; a seller
+/// with no row here goes to the whole design team.
+model DesignerAssignment {
+  id         String   @id @default(uuid())
+  sellerId   String   @unique
+  designerId String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([designerId])
+}
+
+/// The Etsy listings file a seller keeps current. Only its summary is kept --
+/// the listings themselves are far too many to show -- and uploading a new file
+/// replaces the old one. One active file per seller.
+model ListingMockupFile {
+  id         String   @id @default(uuid())
+  sellerId   String   @unique
+  fileName   String
+  rowCount   Int      @default(0)
+  skuCount   Int      @default(0)
+  uploadedBy String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+/// Seller SKU -> listing photo, taken from that file's SKU and IMAGE1 columns.
+/// Used to fill a missing mockup link when an order is imported.
+model ListingMockup {
+  id        String   @id @default(uuid())
+  sellerId  String
+  /// Upper-cased, trimmed SKU used for matching; `sku` keeps it as written.
+  skuKey    String
+  sku       String
+  imageUrl  String
+  /// Every distinct listing photo seen for this SKU, first one first.
+  images    String   @default("[]")
+  createdAt DateTime @default(now())
+
+  @@unique([sellerId, skuKey])
+  @@index([sellerId])
+}
